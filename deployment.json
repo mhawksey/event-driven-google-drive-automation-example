@@ -1,0 +1,27 @@
+{
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/drive.addons.metadata.readonly",
+    "https://www.googleapis.com/auth/userinfo.email"
+  ],
+  "addOns": {
+    "common": {
+      "name": "Drive to Sheets Notifier",
+      "logoUrl": "https://fonts.gstatic.com/s/i/short-term/release/googlesymbols/cloud_sync/default/48px.svg",
+      "homepageTrigger": {
+        "runFunction": "URL_PLACEHOLDER_ADDON_HANDLER"
+      }
+    },
+    "drive": {
+      "onItemsSelectedTrigger": {
+        "runFunction": "URL_PLACEHOLDER_ADDON_HANDLER"
+      }
+    },
+    "httpOptions": {
+      "granularOauthPermissionSupport": "OPT_IN"
+    }
+  }
+}
