@@ -4,6 +4,13 @@ This repository contains a demo Google Workspace Add-on built using Google Cloud
 
 This demo uses a modern **OAuth 2.0 Web Flow** architecture. It captures an offline `refresh_token` from the user, allowing a backend Cloud Function (triggered by Pub/Sub) to safely read newly added files from Drive and append them to a target Google Sheet securely on the user's behalf. 
 
+### What you'll learn
+- Configure Google Workspace APIs and an OAuth consent screen
+- Deploy serverless infrastructure (Cloud Functions, Firestore, Pub/Sub) using Terraform
+- Create an Add-on deployment descriptor to map a Google Workspace Add-on to your backend HTTP endpoints
+- Authorize and capture user identity and offline refresh tokens for asynchronous processing
+- Respond to Workspace Events dynamically to automate writing rows to Google Sheets
+
 ## Repository Structure
 - `/addon-handler/`: The Cloud Function that serves the Add-on UI cards, handles the OAuth Web callback, stores tokens in Firestore, and creates the Event Subscription.
 - `/event-processor/`: The Cloud Function that receives Push Webhooks from Pub/Sub, executes OAuth flow via `refresh_token`, and securely appends a row to the Sheets file.
@@ -23,6 +30,9 @@ This demo uses a modern **OAuth 2.0 Web Flow** architecture. It captures an offl
 ---
 
 ### Step 1: Create OAuth Credentials
+
+The add-on requires user permission to run and take action on their data (reading from Google Drive and writing to Google Sheets). We need to configure the project's OAuth consent screen and generate Web Application credentials to enable this secure flow.
+
 Because Terraform cannot fully automate the creation of OAuth Consent Screens and Client IDs for personal consumer accounts, you must set these up manually in the Cloud Console:
 
 1. Open your GCP Project and go to **APIs & Services > OAuth consent screen**.
@@ -39,6 +49,9 @@ Because Terraform cannot fully automate the creation of OAuth Consent Screens an
 ---
 
 ### Step 2: Deploy Infrastructure with Terraform
+
+To make the add-on work, we need a backend service to serve UI actions (`addon-handler`), an asynchronous worker (`event-processor`), a database to store user tokens (`Firestore`), and `Pub/Sub` for webhook delivery. We will use Terraform to automate provisioning these resources.
+
 Navigate to the `terraform/` directory. You will be prompted to enter your the `project_id` and the `oauth_client_id` + secret you just created.
 
 ```bash
@@ -58,28 +71,37 @@ Once finished, Terraform will output `addon_handler_url`.
 
 ---
 
-### Step 3: Configure the Workspace Add-on
+### Step 3: Register the Add-on
+
+Now that the infrastructure is up and running, describe the add-on so Google Workspace knows how to display and invoke it.
 
 1. Open the `deployment.json` file in the root directory.
 2. Replace `URL_PLACEHOLDER_ADDON_HANDLER` with your actual `addon_handler_url` from the Terraform output.
-3. Open the Google Cloud Console and navigate to **APIs & Services > Google Workspace Marketplace SDK**.
-4. Enable the SDK if you haven't, then create a new HTTP Deployment.
-5. Paste the updated contents of your `deployment.json` file and click **Save**.
-6. Click **Install** under the HTTP Deployment tab to install the Add-on on your account.
+3. Upload the deployment descriptor by running the command:
+
+   ```bash
+   gcloud workspace-add-ons deployments create drive-events-add-on --deployment-file=deployment.json
+   ```
 
 ---
 
-### Step 4: Test the Flow
-1. Open Google Drive in your browser.
-2. Click the Add-on icon in the right side panel to open the Notifier.
-3. The Add-on will instruct you to **"Authorize App"**.
-4. Click the button. A new browser tab will open the Google OAuth Consent screen. 
-5. Grant the permissions. You'll see an "Authorization Successful!" page letting you know you can safely close the tab.
-6. Go back to Drive, click the **Back** arrow or reload the Add-on. 
-7. Select any Folder in Drive. The Add-on will now show the subscription configuration form!
-8. Paste the URL of any Google Sheet you own and click **Subscribe**.
-9. Upload a new file into the selected Drive folder.
-10. Check your Google Sheet. You should see a new row populated natively as you!
+### Step 4: Install the Add-on for testing
+
+To install the add-on in development mode for your account, run:
+
+```bash
+gcloud workspace-add-ons deployments install drive-events-add-on
+```
+
+1. Open [Google Drive](https://drive.google.com/) in a new tab or window. On the right-hand side, find the Add-on icon to open the Notifier.
+2. To open the add-on, click the icon. A prompt to authorize the add-on appears.
+3. Click the **"Authorize App"** button and follow the authorization flow instructions in the popup. A new browser tab will open the Google OAuth Consent screen. 
+4. Grant the permissions. You'll see an "Authorization Successful!" page letting you know you can safely close the tab.
+5. Go back to Drive, click the **Back** arrow or reload the Add-on. 
+6. Select any Folder in Drive. The Add-on will now show the subscription configuration form!
+7. Paste the URL of any Google Sheet you own and click **Subscribe**.
+8. Upload a new file into the selected Drive folder.
+9. Check your Google Sheet. You should see a new row populated natively as you!
 
 ---
 
