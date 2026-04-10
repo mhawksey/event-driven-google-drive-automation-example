@@ -17,6 +17,8 @@ This demo uses a modern **OAuth 2.0 Web Flow** architecture. It captures an offl
 - `/terraform/`: Infrastructure-as-code configuration to deploy all required APIs, IAM bindings, Firestore DB, and Cloud Functions.
 - `deployment.json`: The manifest file used to configure the Add-on.
 
+> **Want to learn how the code works?** Check out the [CODE_WALKTHROUGH.md](CODE_WALKTHROUGH.md) for a detailed technical breakdown of the Node.js functions, OAuth routing, and background processing.
+
 ---
 
 ## 🛠 Deployment Guide
@@ -128,9 +130,9 @@ terraform destroy \
 This Add-on is designed as a demonstration of the Workspace Events API, Google Cloud infrastructure, and OAuth web flows. If you are planning to take this solution to a production environment, please consider the following enhancements:
 
 ### 1. Subscription Renewal
-Workspace Events API subscriptions have an expiration time. This demo creates a subscription but does not manage its lifecycle. In a production app, you should:
-- Save the subscription `expireTime` or TTL in Firestore.
-- Implement a scheduled job (e.g., using Cloud Scheduler) to periodically trigger a Cloud Function that reads active subscriptions from Firestore and calls the [`subscriptions.patch` endpoint](https://developers.google.com/workspace/events/reference/rest/v1/subscriptions/patch) to extend the `ttl` before it expires. Because we set `includeResource: false` when creating the subscription, it can last up to 7 days, but can be programmatically renewed
+Workspace Events API subscriptions have an expiration time. This demo creates a subscription but does not manage its lifecycle. In a production app, you should handle subscription renewals. There are two primary patterns:
+- **Event-Driven (Recommended):** The Workspace Events API will automatically emit a lifecycle event of type `google.workspace.events.subscription.v1.expirationReminder` when a subscription is nearing expiration. You can update the `event-processor` to intercept this specific `ce-type` event and programmatically call the [`subscriptions.patch` endpoint](https://developers.google.com/workspace/events/reference/rest/v1/subscriptions/patch) to extend the `ttl`. (Note: The current demo safely intercepts and drops these events).
+- **Scheduled Job:** Save the subscription `expireTime` or TTL in Firestore. Implement a scheduled job (e.g., using Cloud Scheduler) to periodically trigger a Cloud Function that reads active subscriptions from Firestore and calls the `subscriptions.patch` endpoint to extend the `ttl` before it expires. Because we set `includeResource: false` when creating the subscription, it can last up to 7 days, but can be programmatically renewed.
 
 ### 2. Broadening Event Types
 This demo exclusively uses the `google.workspace.drive.file.v3.created` event type to monitor when new files are added. 
@@ -141,5 +143,5 @@ This project automatically provisions a [Dead Letter Topic](https://cloud.google
 - **Production Tip**: Ensure you configure active alerting (like Cloud Monitoring alerts) on this DLQ topic so you are notified when unprocessable events accumulate. These messages can then be inspected and replayed manually without data loss.
 
 ### 4. Robust Error Handling & Cleanup
-The current `event-processor` relies on standard Pub/Sub retries. In a mature setup, you should also handle token revocations (e.g., if a user revokes the Add-on access) gracefully and ensure you actively clean up orphaned subscriptions and states in Firestore to prevent database bloat over time.
+The current `event-processor` relies on standard Pub/Sub retries for transit failures, but actively intercepts unrecoverable `invalid_grant` OAuth errors resulting from revoked user sessions or expired credentials. When detected, the backend gracefully drops the failed webhooks without endlessly filling the DLQ and auto-deletes the orphaned token from Firestore. This ensures your database stays clean and forces the user back into the secure OAuth onboarding interface seamlessly upon their next Add-on use.
 

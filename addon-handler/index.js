@@ -99,19 +99,26 @@ exports.addonHandler = async (req, res) => {
 
       // 1. Authenticate Add-on User
       const userToken = event.authorizationEventObject && event.authorizationEventObject.userOAuthToken;
-      if (!userToken) {
-        return res.json(createAlertCard('Error: Missing authorization token from Workspace.'));
+      const idToken = event.authorizationEventObject && event.authorizationEventObject.userIdToken;
+
+      if (!userToken || !idToken) {
+        return res.json(createAlertCard('Error: Missing authorization tokens from Workspace.'));
       }
       
       let userId;
       try {
-        const authForDrive = new google.auth.OAuth2();
-        authForDrive.setCredentials({ access_token: userToken });
-        const oauth2 = google.oauth2({ version: 'v2', auth: authForDrive });
-        const userinfo = await oauth2.userinfo.get();
-        userId = userinfo.data.id;
+        // Use the ID token provided in the event instead of making a network request to the userinfo endpoint
+        const payloadBase64 = idToken.split('.')[1];
+        const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+        const tokenAudience = decodedPayload.aud;
+
+        const ticket = await oauth2Client.verifyIdToken({
+          idToken: idToken,
+          audience: tokenAudience, // Ensure the audience matches the token's issued client ID
+        });
+        userId = ticket.getPayload().sub;
       } catch (err) {
-        console.error('Failed to get user profile details:', err);
+        console.error('Failed to verify ID token details:', err);
         return res.json(createAlertCard(`Error: Could not retrieve user profile details. ${err.message}`));
       }
 
@@ -271,9 +278,10 @@ async function handleConfigureSubscription(event, userId) {
   if (!match) return { renderActions: createAlertCard('Error: Could not extract Spreadsheet ID.') };
   const spreadsheetId = match[1];
 
+  const auth = new google.auth.OAuth2();
+  auth.setCredentials({ access_token: userToken });
+
   try {
-    const auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: userToken });
 
     const payload = {
       targetResource: `//drive.googleapis.com/files/${folderId}`,
@@ -308,6 +316,40 @@ async function handleConfigureSubscription(event, userId) {
 
     return { renderActions: createAlertCard('Success! Subscription created and linked to your Google Sheet.') };
   } catch (error) {
+    const isConflict = error.code === 409 || (error.response && error.response.status === 409) || error.message.includes('already exists');
+    if (isConflict) {
+      console.log('Subscription already exists, attempting to recover the mapping from Workspace Events API...');
+      try {
+        const filterStr = `event_types:"google.workspace.drive.file.v3.created" AND target_resource="//drive.googleapis.com/files/${folderId}"`;
+        const listResponse = await auth.request({
+          method: 'GET',
+          url: `https://workspaceevents.googleapis.com/v1beta/subscriptions?filter=${encodeURIComponent(filterStr)}`
+        });
+        
+        const subs = listResponse.data.subscriptions || [];
+        const targetResource = `//drive.googleapis.com/files/${folderId}`;
+        const existingSub = subs.find(s => s.targetResource === targetResource);
+        
+        if (!existingSub) throw new Error('Subscription purportedly exists but was not found in recovery lookup.');
+        
+        const subscriptionName = existingSub.name;
+        console.log(`Successfully recovered existing subscription: ${subscriptionName}`);
+        
+        await firestore.collection('drive-event-subscriptions').doc(encodeURIComponent(subscriptionName)).set({
+          subscriptionName: subscriptionName,
+          folderId: folderId,
+          spreadsheetId: spreadsheetId,
+          spreadsheetUrl: sheetsUrlInput,
+          userId: userId,
+          createdAt: new Date().toISOString()
+        });
+        return { renderActions: createAlertCard('Success! Existing subscription recovered and re-linked to your Google Sheet.') };
+      } catch (recoveryError) {
+        console.error('Error recovering subscription:', recoveryError);
+        return { renderActions: createAlertCard(`Error recovering subscription: ${recoveryError.message}`) };
+      }
+    }
+
     console.error('Error creating subscription:', error);
     return { renderActions: createAlertCard(`Error creating subscription: ${error.message}`) };
   }

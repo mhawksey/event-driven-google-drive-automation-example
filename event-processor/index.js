@@ -9,6 +9,7 @@ const CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET;
 exports.processEvent = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
+  let activeUserId = null;
   try {
 
     const pubsubMessage = req.body.message;
@@ -21,8 +22,21 @@ exports.processEvent = async (req, res) => {
     console.log('Received Message Attributes:', JSON.stringify(pubsubMessage.attributes || {}));
     console.log('Received Event Data:', JSON.stringify(event));
 
-    const fileId = event.file ? event.file.id : null;
-    if (!fileId && !event.name) {
+    const ceType = pubsubMessage.attributes ? pubsubMessage.attributes['ce-type'] : null;
+    if (ceType === 'google.workspace.events.subscription.v1.expirationReminder') {
+      console.log('Received expiration reminder. Not implemented. Skipping.');
+      return res.status(200).send('Ignored expirationReminder');
+    }
+
+    let fileId = event.file ? event.file.id : null;
+    // Fallback: extract fileId from ce-subject if includeResource=false
+    if (!fileId && pubsubMessage.attributes && pubsubMessage.attributes['ce-subject']) {
+      const subject = pubsubMessage.attributes['ce-subject'];
+      const match = subject.match(/\/files\/([^/]+)$/);
+      if (match) fileId = match[1];
+    }
+
+    if (!fileId) {
       console.log('No file ID or resource name found, skipping event.');
       return res.status(200).send('No file ID');
     }
@@ -68,6 +82,7 @@ exports.processEvent = async (req, res) => {
 
     const spreadsheetId = mappedSubscription.spreadsheetId;
     const userId = mappedSubscription.userId;
+    activeUserId = userId;
 
     if (!userId) {
       console.error('Subscription mapping is missing userId. Cannot perform OAuth flow.');
@@ -131,6 +146,21 @@ exports.processEvent = async (req, res) => {
     return res.status(200).send('Success');
 
   } catch (error) {
+    const isInvalidGrant = error.message === 'invalid_grant' || (error.response && error.response.data && error.response.data.error === 'invalid_grant');
+    
+    if (isInvalidGrant) {
+      console.warn(`Refresh token is invalid or expired. Event dropped to prevent infinite retries.`);
+      if (activeUserId) {
+        console.log(`Removing expired token for user ${activeUserId} from Firestore.`);
+        try {
+          await firestore.collection('oauth-tokens').doc(activeUserId).delete();
+        } catch (dbErr) {
+          console.error('Failed to delete invalid token from Firestore:', dbErr);
+        }
+      }
+      return res.status(200).send('Invalid token, event dropped');
+    }
+
     console.error('Error processing event:', error);
     res.status(500).send('Internal Server Error');
   }
